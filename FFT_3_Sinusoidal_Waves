@@ -1,0 +1,120 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "arduinoFFT.h"
+
+#define SAMPLES 64
+#define SAMPLING_FREQ 4000
+#define OLED_WIDTH 128
+#define OLED_HEIGHT 64
+
+float vReal[SAMPLES];
+float vImag[SAMPLES];
+ArduinoFFT FFT = ArduinoFFT();
+
+// OLED config
+#define OLED_SDA 7
+#define OLED_SCL 6
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+
+// Sound sensor pin
+#define SOUND_PIN 4
+
+// Audio tuning
+const int BASELINE = 260;    // typical noise floor for ESP32-C3
+const float GAIN = 2.5;      // increase if response is weak
+
+float phase = 0;
+
+void setup() {
+  Wire.begin(OLED_SDA, OLED_SCL);
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("FFT Sine Dancers");
+  display.display();
+  delay(1000);
+
+  Serial.begin(115200);
+}
+
+void loop() {
+  // Sample sound
+  for (int i = 0; i < SAMPLES; i++) {
+    int raw = analogRead(SOUND_PIN);
+    float centered = (float)(raw - BASELINE) * GAIN;
+    vReal[i] = centered;
+    vImag[i] = 0;
+    delayMicroseconds(1000000 / SAMPLING_FREQ);
+  }
+
+  // FFT analysis
+  FFT.Windowing(vReal, SAMPLES, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+  FFT.Compute(vReal, vImag, SAMPLES, FFT_FORWARD);
+  FFT.ComplexToMagnitude(vReal, vImag, SAMPLES);
+
+  // Optional: Print debug to Serial
+  printFFTDebug();
+
+
+  // Frequency bands
+  float bass   = getAverage(2, 12);    // Bass: low bins
+  float mid    = getAverage(7, 20);   // Mid: midrange bins
+  float treble = getAverage(21, 32);  // Treble: high bins
+
+  // Normalize for drawing
+  bass = constrain(bass / 100.0, 0, 1);
+  mid = constrain(mid / 100.0, 0, 1);
+  treble = constrain(treble / 100.0, 0, 1);
+
+  // Draw sine waves
+  display.clearDisplay();
+  drawSineWave(10, bass, 10);    // Y offset, magnitude, height
+  drawSineWave(32, mid, 10);
+  drawSineWave(54, treble, 10);
+  display.display();
+
+  phase += 0.25;
+}
+
+void drawSineWave(int yOffset, float magnitude, int height) {
+  int prevX = 0, prevY = yOffset;
+  for (int x = 1; x < OLED_WIDTH; x++) {
+    float wave = sin((x * 0.2) + phase) * magnitude;
+    int y = yOffset + wave * height;
+    display.drawLine(prevX, prevY, x, y, WHITE);
+    prevX = x;
+    prevY = y;
+  }
+}
+
+float getAverage(int startBin, int endBin) {
+  float sum = 0;
+  for (int i = startBin; i <= endBin; i++) {
+    sum += vReal[i];
+  }
+  return sum / (endBin - startBin + 1);
+}
+
+void drawWave(int yOffset, float amplitude, uint16_t color) {
+  for (int x = 0; x < OLED_WIDTH; x++) {
+    float angle = (2 * PI * x) / OLED_WIDTH;
+    int y = yOffset + sin(angle) * amplitude / 20.0;  // Scale amplitude
+    display.drawPixel(x, y, color);
+  }
+}
+
+void printFFTDebug() {
+  Serial.println("Bin\tFreq(Hz)\tAmplitude");
+  for (int i = 1; i < SAMPLES / 2; i++) {
+    float FREQ = i * (SAMPLING_FREQ / (float)SAMPLES);
+    Serial.print(i);
+    Serial.print("\t");
+    Serial.print(FREQ, 1);
+    Serial.print("\t\t");
+    Serial.println(vReal[i], 2);
+  }
+  Serial.println();
+}
